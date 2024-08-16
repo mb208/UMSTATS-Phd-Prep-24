@@ -1,0 +1,251 @@
+---
+title: "Brief Intro to Parallelization (in R)"
+author: "Jesse Wheeler"
+date: "`r Sys.Date()`"
+output: beamer_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Introduction
+
+**What this presentation ISN’T**: 
+
+- An exhaustive description of the correct way to do parallelization 
+- A guide to the Great Lakes computing resource 
+- A replacement of what is covered in Stats 810
+- A guide to GPU programming 
+
+**What this presentation IS:**
+
+- A description of a possible parallelization workflow that some students have found useful 
+- A list with a collection of resources that you can refer to later 
+
+
+To follow along will need to install `doParallel`, `doRNG`, and `foreach`.
+
+## Motivation
+
+**Why parallelization?**
+
+- Computationally expensive jobs can be made faster using more resources
+- Many tasks require independent calculations 
+- Basically all modern computers have multiple cores 
+
+## Embarassingly Parallel 
+
+In this presentation, we focus on things that are *embarassingly parallel*, which means that it is easy to split the job into multiple tasks and the tasks do not need to communicate with eachother. 
+
+Examples: 
+
+- Random number generation 
+- grid search 
+- fitting trees in a random forest 
+- Monte Carlo simulation 
+- Numerical integration
+- Training a neural network (using GPUs)
+- "brute force" algorithms 
+
+## Terminology
+
+First, some basic terminology: 
+
+- *cluster*: a collection of objects capable of hosting cores; this can be small like a collection of cores on your laptop, or large, like the Great Lakes Slurm cluster. 
+- *core*: Part of a CPU that that does the computations, can be thought of as the "brain" of the computer. 
+- *process*: a single instance of the program you're running, like an instance of `R`. Each core typically runs a single process. 
+- *(Compute) node*: In the context of the Great-Lakes cluster, this is like a single computer. Each node (on Great-Lakes) has 36 cores, and the most simple parallelization doesn't require communication between nodes.
+
+## Parallel Backends
+
+There are two primary approaches to parallelization in `R`: \pause
+
+- Using *sockets*, which launches a new version of R on each core, and this is done using a networking scheme on your computer (works for all computers). \pause
+- *forking*, which copies the current version of R and moves it to a new core (works for Macs / Linux, not so much on Windows). These are usually faster, easier to implement than sockets. 
+
+## parallel package: forked cluster
+
+The parallel package gives us the ability to extend `apply` functions so that they run in parallel. This is really easy, especially if you are using a Mac / Linux. 
+
+```{r, echo=TRUE}
+library(parallel)  # Loading the parallel package
+
+detectCores()  # Check number of cores available to me
+
+# Create a function that takes ~1 sec to run
+f <- function(i) {
+  Sys.sleep(1)
+}
+```
+
+## forked cluster (continued...)
+
+```{r, echo=TRUE}
+num_cores <- detectCores()
+# Try function sequentially 
+system.time(
+  lapply(1:num_cores, f)
+)
+
+# Try function in parallel
+system.time(
+  mclapply(1:num_cores, f, mc.cores = num_cores)
+)
+```
+
+## Socket Cluster 
+
+Socket clusters are a little slower and require a bit more work, but if you are using a Windows machine this is the only option. To use a socket cluster, we must do the following: \pause
+
+- Make a socket cluster \pause
+- Tell `R` that we are going to use the cluster \pause
+- Make sure we have all of the packages + data loaded on the cluster \pause
+- Close the cluster (if you don't do this it will temporarily slow down your computer).
+
+## Socket Cluster (Continued...)
+
+```{r, echo=TRUE}
+num_cores <- detectCores() 
+cl <- makeCluster(num_cores)  # Make the cluster 
+system.time(parLapply(cl, 1:num_cores, f))
+stopCluster(cl)
+```
+
+You will need to read function documentation in order to properly export R objects in they are used in your function. 
+
+## Foreach + doParallel
+
+Sometimes `apply` like functions are not sufficient for our computational needs. 
+The `foreach` and `doParallel` packages allow us to write for-loops that are computed in parallel (must be embarrassingly parallel). 
+
+```{r, echo=TRUE}
+library(foreach)
+results <- foreach(i=1:20, .combine = c) %do% {
+  is_even <- i %% 2 == 0
+  
+  is_even
+}
+
+head(results)
+```
+
+## Register doParallel backend: 
+
+```{r, echo=TRUE}
+library(doParallel)
+# If using Windows: 
+# cl <- makeCluster(num_cores)
+# registerDoParallel(cl)
+
+registerDoParallel(num_cores)
+system.time({
+  foreach(i=1:8, .combine = c) %dopar% {Sys.sleep(1)}
+}
+)
+
+# stopCluster(cl)  # if using Windows
+```
+
+## Reproducible Seed
+
+With real examples, you really want to make sure your results are reproducible by setting a reproducible seed.
+Typically this is done by using the `set.seed(123)` function, with some number (here I used 123). This is something you have to think about carefully! \pause
+
+- With a socket cluster, you have brand new `R` sessions and they will not have a reproducible seed. \pause
+- With a forked cluster, you have a copy of the same `R` session, so you will have the same reproducible seed (usually not a good thing). \pause 
+
+The `apply` functions of the `parallel` package take care of this for you. With `foreach`, we should use the package `doRNG`, and replace `%dopar%` with `%dorng%`.
+
+## doRNG
+
+```{r, echo=TRUE}
+library(doRNG)
+
+set.seed(123)
+res <- foreach(i=1:5) %dorng% { runif(3) }
+set.seed(123)
+res2 <- foreach(i=1:5) %dorng% { runif(3) }
+identical(res, res2)
+```
+
+This is also useful for debugging.
+
+## Great-Lakes Computing 
+
+Parallelizing code on your laptop can save you some time, but there is often extra work that needs to be done in order to run things properly in parallel. 
+Because of this, it's often the case that the effort to parallelize your code is only worth it for very computationally expensive jobs. 
+
+When this is the case, you probably want to use a computer more powerful than your laptop. 
+All PhD students have access to the Great-Lakes Slurm Cluster, which gives you access to hundreds (even thousands) of cores at once and a large amount of memory.
+
+## Connecting to Great-Lakes
+
+To connect to the Great-Lakes computing cluster, you need to be connected to UM networks, either by being physically located on campus, or by having a VPN installed on your computer. More details about this are covered in Stats 810. 
+
+To connect via macbook or linux, open a terminal and use the following:
+
+```ˇ
+ssh <YOUR-UNIQUE-NAME>@greatlakes.arc-ts.umich.edu
+ssh marcbr@greatlakes.arc-ts.umich.edu
+```
+
+There are also interactive ways that you can log into greatlakes, but I highly recommend becoming somewhat familiar with navigating the command line. 
+
+## Command Line Navigation: 
+
+- `pwd`: (print working directory) check where you are in the file tree
+- `ls`: list all folders / files in the current working directory 
+- `cd <folder-name>`: move into folder called `<folder-name>`
+- `cd ..`: go up (or backwards) one folder through the directory
+
+## Running `R` on Great-Lakes
+
+To run `R`, you need to load the `R` module: 
+
+```
+module load R
+```
+
+Now you are in an `R` console and can run any `R` code. 
+
+## SLURM scheduler
+
+Now we can run `R` code on the Great-Lakes cluster, but in general you shouldn't run large computational jobs this way. 
+If everyone logged on like we did and tried to run code with many cores, we might overwhelm the system.
+We just connected via an interactive session, and these types of sessions should only be used for small / debugging jobs. 
+
+Instead, we need to use a resource *scheduler*, which is basically a system that can efficiently manage resources. 
+Great-Lakes uses the SLURM scheduler, which is probably the most common type used. 
+
+## SLURM scripts 
+
+In each SLURM script, you basically tell the scheduler a few important things like: how many resources (Nodes, CPUs, RAM) you need, the maximum amount of time it should run, how you're paying for the job, and how to notify you when the job starts/finishes/fails. 
+After this important meta-data, you write `bash` script code to run your program (e.g., `Rscript --vanilla code.R`).
+
+See [Great-Lakes SLURM guide](https://arc.umich.edu/greatlakes/slurm-user-guide/) for more details. 
+
+Once you have a script, you submit the job via command line using `sbatch slurm-script.sh` 
+
+## File Transfers 
+
+The stats-wiki pages has a nice entry about transferring files between your personal machines and Great-Lakes [here](https://wiki.stat.lsa.umich.edu/index.php/HPC#Transferring_Files). 
+
+I personally like to use the command line tool `sftp` (Secure File Transfer Protocol). This is already installed if you're using a Mac or Linux machine. 
+
+We use this tool to connect to a special *transfer only server*, by typing `sftp uniqname@greatlakes-xfer.arc-ts.umich.edu`. Now you can "download" files by using `get file.txt`, upload files using `put file.txt`, and navigate on the transfer server using `ls`, `cd`, `pwd`. To navigate on your **l**ocal machine, add an `l` before everything: `lls`, `lcd`, `lpwd`. 
+
+## LIVE-DEMO
+
+Approximating $\pi$ using parallel computing, both locally and on the Great-Lakes cluster. 
+
+## Additional Tools / Resources
+
+`doFuture` package in `R` is a nice way to set-up a parallel back-end. I'm not too familiar with the package, but it looks like a promising way to avoid the complications that arise when writing parallel code that works on both Mac/Linux vs Windows machines. 
+
+These packages help by submitting SLURM jobs for you. 
+
+- `batchtools` `R` package (live demo if time permits)
+- `rslurm` `R` package
+- `clustermq` `R` package 
+
